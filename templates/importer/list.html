@@ -5,7 +5,10 @@
 {% block extrahead %}
     {% load compressed %}
     {% compressed_js 'map' %}
-<!-- <script> importer js </script> -->
+  <link rel="stylesheet" href="{{ STATIC_URL }}css/importer.css" type="text/css"></link>
+  <script src="//cdnjs.cloudflare.com/ajax/libs/underscore.js/1.4.4/underscore-min.js"></script>
+  <script src="{{ STATIC_URL }}js/importer.js"></script>
+
 {% endblock %}
 
 {% block content_body_top %}
@@ -14,36 +17,78 @@
 
 {% block middle_panel %}
 
-<h1>Tree Imports</h1>
+  <div id="speciesunitsdialog">
+    <table>
+      <tr><th>Field</th><th>Unit</th></tr>
+      <tr><td>Max DBH</td></tr>
+      <tr><td>Max Height</td></tr>
+    </table>
+    <button class="create">Create</button>
+    <button class="cancel">Cancel</button>
+  </div>
 
-<table>
-{% for ie in treeevents %}
-  <tr>
-    <td>{{ ie.pk }}</td>
-    <td class="col1Wide">{{ ie.file_name }}</td>
-    <td>{{ ie.created }}</td>
-    <td><a href="{% url 'importer.views.show_tree_import_status' ie.pk %}">
-        More Information
-      </a></td>
-  </tr>
-{% endfor %}
-</table>
+  <div id="treeunitsdialog">
+    <table>
+      <tr><th>Field</th><th>Unit</th></tr>
+      <tr><td>Plot Length</td></tr>
+      <tr><td>Plot Width</td></tr>
+      <tr><td>Diameter</td></tr>
+      <tr><td>Tree Height</td></tr>
+      <tr><td>Canopy Height</td></tr>
+    </table>
+    <button class="create">Create</button>
+    <button class="cancel">Cancel</button>
+  </div>
 
-<h1>Species Imports</h1>
+<div>
+  <h1 class="importer-header">Bulk Uploader</h1>
+  <div class="importer-upload">
+    <h2>Tree Import</h2>
+    <form id="treeform" method="POST" action="{% url 'importer.views.create' %}" enctype="multipart/form-data">
+      <input type="hidden" name="type" value="tree"></input>
+      <input name="unit_plot_length" value="1" type="hidden">
+      <input name="unit_plot_width" value="1" type="hidden">
+      <input name="unit_diameter" value="1" type="hidden">
+      <input name="unit_tree_height" value="1" type="hidden">
+      <input name="unit_canopy_height" value="1" type="hidden">
+      File to Upload: <input type="file" name="file"></input>
+    </form>
+    <button id="submittree" class="btn btn-success">Go &raquo;</button>
+  </div>
+  <div class="importer-upload">
+    <h2>Species Import</h2>
+    <form id="speciesform" method="POST" action="{% url 'importer.views.create' %}" enctype="multipart/form-data">
+      <input type="hidden" name="type" value="species"></input>
+      File to Upload: <input type="file" name="file"></input>
+    </form>
+    <button id="submitspecies" class="btn btn-success">Go &raquo;</button>
+  </div>
+</div>
 
-<table>
-{% for ie in speciesevents %}
-  <tr>
-    <td>{{ ie.pk }}</td>
-    <td class="col1Wide">{{ ie.file_name }}</td>
-    <td>{{ ie.created }}</td>
-    <td><a href="{% url 'importer.views.show_species_import_status' ie.pk %}">
-        More Information
-      </a></td>
-  </tr>
-{% endfor %}
-</table>
-
+<div class="importer-lists">
+  <h1 class="importer-header">All Imports</h1>
+  <div>
+    <h2>Active Tree Imports</h2>
+    {% include 'importer/partials/import_table.html' with things=trees_active id="activetree" link="tree" %}
+  </div>
+  <div>
+    <h2>Finished Tree Imports</h2>
+    {% include 'importer/partials/import_table.html' with things=trees_finished id="finishedtree" link="tree" %}
+  </div>
+  <div>
+    <h2>Active Species Imports</h2>
+    {% include 'importer/partials/import_table.html' with things=species_active id="activespecies" link="species" %}
+  </div>
+  <div>
+    <h2>Finished Species Imports</h2>
+    {% include 'importer/partials/import_table.html' with things=species_finished id="finishedspecies" link="species" %}
+  </div>
+  <h3>
+    <a href="{{ SITE_ROOT }}importer/export/species/all">
+      Export All Species
+    </a>
+  </h3>
+</div>
 
 {% endblock %}
 

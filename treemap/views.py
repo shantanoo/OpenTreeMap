@@ -395,12 +395,17 @@ def species(request, selection='all', format='html'):
         species = Species.objects.all().order_by('common_name')
 
     if format == 'json':
-        res = [{"symbol":str(x.symbol or ''),
-                 "cname":str(x.common_name or ''),
-                 "cultivar":str(x.cultivar_name or ''),
-                 "sname":str(x.scientific_name or x.genus),
-                 "id": int(x.id),
-                 "count": int(x.tree_count)} for x in species]
+        res = [{"symbol":unicode(x.symbol or ''),
+                "cname":unicode(x.common_name or ''),
+                "cultivar":unicode(x.cultivar_name or ''),
+                "sname":unicode(x.scientific_name or x.genus),
+                "species": x.species,
+                "genus": x.genus,
+                "cultivar": x.cultivar_name,
+                "family": x.family,
+                "other_part": x.other_part_of_name,
+                "id": int(x.id),
+                "count": int(x.tree_count)} for x in species]
         return render_to_response('treemap/basic.json',{'json':simplejson.dumps(res)})
 
     if format == 'csv':
@@ -1791,10 +1796,30 @@ from django.core import serializers
 def verify_edits(request, audit_type='tree'):
 
     changes = []
-    trees = Tree.history.filter(present=True).filter(_audit_user_rep__lt=1000).filter(_audit_change_type__exact='U').exclude(_audit_diff__exact='').filter(_audit_verified__exact=0)
-    newtrees = Tree.history.filter(present=True).filter(_audit_user_rep__lt=1000).filter(_audit_change_type__exact='I').filter(_audit_verified__exact=0)
-    plots = Plot.history.filter(present=True).filter(_audit_user_rep__lt=1000).filter(_audit_change_type__exact='U').exclude(_audit_diff__exact='').filter(_audit_verified__exact=0)
-    newplots = Plot.history.filter(present=True).filter(_audit_user_rep__lt=1000).filter(_audit_change_type__exact='I').filter(_audit_verified__exact=0)
+    trees = Tree.history.filter(present=True)\
+                        .filter(_audit_change_type__exact='U')\
+                        .exclude(_audit_diff__exact='')\
+                        .filter(_audit_verified__exact=0)
+
+    newtrees = Tree.history.filter(present=True)\
+                           .filter(_audit_change_type__exact='I')\
+                           .filter(_audit_verified__exact=0)
+
+    plots = Plot.history.filter(present=True)\
+                        .filter(_audit_change_type__exact='U')\
+                        .exclude(_audit_diff__exact='')\
+                        .filter(_audit_verified__exact=0)
+
+    newplots = Plot.history.filter(present=True)\
+                           .filter(_audit_change_type__exact='I')\
+                           .filter(_audit_verified__exact=0)
+
+    if settings.SHOW_ADMIN_EDITS_IN_RECENT_EDITS is False:
+        trees = trees.filter(_audit_user_rep__lt=1000)
+        newtrees = newtrees.filter(_audit_user_rep__lt=1000)
+        plots = plots.filter(_audit_user_rep__lt=1000)
+        newplots = newplots.filter(_audit_user_rep__lt=1000)
+
     treeactions = []
     n = None
 

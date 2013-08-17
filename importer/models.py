@@ -1,4 +1,6 @@
+from django.db.models import Count
 from django.conf import settings
+
 from django.contrib.gis.db import models
 from django.contrib.auth.models import User
 from django.contrib.gis.geos import Point
@@ -11,7 +13,7 @@ from importer import errors
 from datetime import datetime
 
 from treemap.models import Species, Neighborhood, Plot,\
-    Tree, ExclusionMask
+    Tree, ExclusionMask, ImportEvent
 
 import json
 
@@ -20,21 +22,60 @@ class GenericImportEvent(models.Model):
     class Meta:
         abstract = True
 
+    PENDING_VERIFICATION = 1
+    VERIFIYING = 2
+    FINISHED_VERIFICATION = 3
+    CREATING = 4
+    FINISHED_CREATING = 5
+    FAILED_FILE_VERIFICATION = 6
+
     # Original Name of the file
     file_name = models.CharField(max_length=255)
 
     # Global errors and notices (json)
     errors = models.TextField(default='')
 
+    field_order = models.TextField(default='')
+
     # Metadata about this particular import
     owner = models.ForeignKey(User)
     created = models.DateTimeField(auto_now=True)
     completed = models.DateTimeField(null=True,blank=True)
 
+    status = models.IntegerField(default=PENDING_VERIFICATION)
+
     # When false, this dataset is in 'preview' mode
     # When true this dataset has been written to the
     # database
     commited = models.BooleanField(default=False)
+
+    def status_summary(self):
+        if self.status == GenericImportEvent.PENDING_VERIFICATION:
+            return "Not Yet Started"
+        elif self.status == GenericImportEvent.VERIFIYING:
+            return "Verifying"
+        elif self.status == GenericImportEvent.FINISHED_VERIFICATION:
+            return "Verification Complete"
+        elif self.status == GenericImportEvent.CREATING:
+            return "Creating Trees"
+        elif self.status == GenericImportEvent.FAILED_FILE_VERIFICATION:
+            return "Invalid File Structure"
+        else:
+            return "Finished"
+
+    def active(self):
+        return self.status != GenericImportEvent.FINISHED_CREATING
+
+    def row_type_counts(self):
+        q = self.row_set()\
+                .values('status')\
+                .annotate(Count('status'))
+
+        return { r['status']: r['status__count'] for r in q }
+
+    def update_status(self):
+        """ Update the status field based on current row statuses """
+        pass
 
     def append_error(self, err, data=None):
         code, msg, fatal = err
@@ -60,8 +101,11 @@ class GenericImportEvent(models.Model):
     def has_errors(self):
         return len(self.errors_as_array()) > 0
 
-    def rows(self):
+    def row_set(self):
         raise Exception('Abstract Method')
+
+    def rows(self):
+        return self.row_set().order_by('idx').all()
 
     def validate_main_file(self):
         raise Exception('Abstract Method')
@@ -71,8 +115,24 @@ class SpeciesImportEvent(GenericImportEvent):
     A TreeImportEvent represents an attempt to upload a csv containing
     species information
     """
-    def rows(self):
-        return self.speciesimportrow_set.order_by('idx').all()
+
+    max_diameter_conversion_factor = models.FloatField(default=1.0)
+    max_tree_height_conversion_factor = models.FloatField(default=1.0)
+
+    def create_row(self, *args, **kwargs):
+        return SpeciesImportRow.objects.create(*args, **kwargs)
+
+    def row_set(self):
+        return self.speciesimportrow_set
+
+    def __unicode__(self):
+        return u"Species Import #%s" % self.pk
+
+    def status_summary(self):
+        if self.status == GenericImportEvent.CREATING:
+            return "Creating Species Records"
+        else:
+            return super(SpeciesImportEvent, self).status_summary()
 
     def validate_main_file(self):
         """
@@ -83,6 +143,7 @@ class SpeciesImportEvent(GenericImportEvent):
 
             # This is a fatal error. We need to have at least
             # one row to get header info
+            self.status = GenericImportEvent.FAILED_FILE_VERIFICATION
             self.save()
             return False
 
@@ -90,8 +151,7 @@ class SpeciesImportEvent(GenericImportEvent):
         datastr = self.rows()[0].data
         input_fields = set(json.loads(datastr).keys())
 
-        #TODO: Species is no longer a required field
-        req = { fields.species.GENUS, fields.species.SPECIES,
+        req = { fields.species.GENUS,
                 fields.species.COMMON_NAME, fields.species.ITREE_CODE }
 
         req -= input_fields
@@ -105,7 +165,8 @@ class SpeciesImportEvent(GenericImportEvent):
             has_errors = True
             self.append_error(errors.UNMATCHED_FIELDS, list(rem))
 
-        if errors:
+        if has_errors:
+            self.status = GenericImportEvent.FAILED_FILE_VERIFICATION
             self.save()
 
         return not has_errors
@@ -118,16 +179,22 @@ class TreeImportEvent(GenericImportEvent):
     tree/plot information
     """
 
-    # We can do some numeric conversions
-    # TODO: Support numeric conversions
+    base_import_event = models.ForeignKey(ImportEvent)
+
     plot_length_conversion_factor = models.FloatField(default=1.0)
     plot_width_conversion_factor = models.FloatField(default=1.0)
     diameter_conversion_factor = models.FloatField(default=1.0)
     tree_height_conversion_factor = models.FloatField(default=1.0)
     canopy_height_conversion_factor = models.FloatField(default=1.0)
 
-    def rows(self):
-        return self.treeimportrow_set.order_by('idx').all()
+    def create_row(self, *args, **kwargs):
+        return TreeImportRow.objects.create(*args, **kwargs)
+
+    def row_set(self):
+        return self.treeimportrow_set
+
+    def __unicode__(self):
+        return u"Tree Import #%s" % self.pk
 
     def validate_main_file(self):
         """
@@ -138,6 +205,7 @@ class TreeImportEvent(GenericImportEvent):
 
             # This is a fatal error. We need to have at least
             # one row to get header info
+            self.status = GenericImportEvent.FAILED_FILE_VERIFICATION
             self.save()
             return False
 
@@ -157,7 +225,8 @@ class TreeImportEvent(GenericImportEvent):
             has_errors = True
             self.append_error(errors.UNMATCHED_FIELDS, list(rem))
 
-        if errors:
+        if has_errors:
+            self.status = GenericImportEvent.FAILED_FILE_VERIFICATION
             self.save()
 
         return not has_errors
@@ -310,6 +379,14 @@ class GenericImportRow(models.Model):
         else:
             return i
 
+    def convert_units(self, data, converts):
+        INCHES_TO_DBH_FACTOR = 1.0 / settings.DBH_TO_INCHES_FACTOR
+
+        # Similar to tree
+        for fld, factor in converts.iteritems():
+            if fld in data and factor != 1.0:
+                data[fld] = float(data[fld]) * factor * INCHES_TO_DBH_FACTOR
+
     def validate_numeric_fields(self):
         def cleanup(fields, fn):
             has_errors = False
@@ -353,18 +430,10 @@ class GenericImportRow(models.Model):
             value = self.datadict.get(field, None)
             if value:
                 all_choices = settings.CHOICES[choice_key]
-                choices = { value for (id,value) in all_choices }
+                choices = { value: id for (id, value) in all_choices }
 
                 if value in choices:
-                    # Some plot choice fields aren't automatically
-                    # converting to choice values so we do it forcibly
-                    # here
-                    if field in self.model_fields.PLOT_CHOICES:
-                        self.cleaned[field] = [id for (id,v)
-                                                    in all_choices
-                                                    if v == value][0]
-                    else:
-                        self.cleaned[field] = value
+                    self.cleaned[field] = choices[value]
                 else:
                     has_errors = True
                     self.append_error(errors.INVALID_CHOICE,
@@ -449,7 +518,9 @@ class SpeciesImportRow(GenericImportRow):
             'wildlife_value': fields.species.WILDLIFE,
             'v_max_dbh': fields.species.MAX_DIAMETER,
             'v_max_height': fields.species.MAX_HEIGHT,
-            'fact_sheet': fields.species.FACT_SHEET
+            'fact_sheet': fields.species.FACT_SHEET,
+            'family': fields.species.FAMILY,
+            'other_part_of_name': fields.species.OTHER_PART_OF_NAME
         }
 
     # Species reference
@@ -499,12 +570,20 @@ class SpeciesImportRow(GenericImportRow):
         genus = self.datadict.get(fields.species.GENUS,'')
         species = self.datadict.get(fields.species.SPECIES,'')
         cultivar = self.datadict.get(fields.species.CULTIVAR,'')
+        other_part = self.datadict.get(fields.species.OTHER_PART_OF_NAME,'')
 
-        if genus != '' or species != '' or cultivar != '':
+        # Save these as "empty" strings
+        self.cleaned[fields.species.GENUS] = genus
+        self.cleaned[fields.species.SPECIES] = species
+        self.cleaned[fields.species.CULTIVAR] = cultivar
+        self.cleaned[fields.species.OTHER_PART_OF_NAME] = other_part
+
+        if genus != '' or species != '' or cultivar != '' or other_part != '':
             matching_species = Species.objects\
                                       .filter(genus__iexact=genus)\
                                       .filter(species__iexact=species)\
-                                      .filter(cultivar_name__iexact=cultivar)
+                                      .filter(cultivar_name__iexact=cultivar)\
+                                      .filter(other_part_of_name__iexact=other_part)
 
             self.cleaned[fields.species.ORIG_SPECIES]\
                 |= { s.pk for s in matching_species }
@@ -547,7 +626,7 @@ class SpeciesImportRow(GenericImportRow):
 
 
     def validate_required_fields(self):
-        req = { fields.species.GENUS, fields.species.SPECIES,
+        req = { fields.species.GENUS,
                 fields.species.COMMON_NAME, fields.species.ITREE_CODE }
 
         has_errors = False
@@ -681,15 +760,21 @@ class SpeciesImportRow(GenericImportRow):
         if species is None:
             species = Species()
 
-        #TODO: Support family field
-        #TODO: What to do about gender
-        #TODO: The whole 'other part of sci name' thing for both species and trees
+        # Convert units
+        self.convert_units(data, {
+            fields.species.MAX_DIAMETER:
+            self.import_event.max_diameter_conversion_factor,
+
+            fields.species.MAX_HEIGHT:
+            self.import_event.max_tree_height_conversion_factor
+        })
+
         #TODO: Update tree count nonsense
 
         for modelkey, importdatakey in SpeciesImportRow.SPECIES_MAP.iteritems():
             importdata = data.get(importdatakey, None)
 
-            if importdata:
+            if importdata is not None:
                 species_edited = True
                 setattr(species, modelkey, importdata)
 
@@ -716,6 +801,36 @@ class TreeImportRow(GenericImportRow):
     WATCH=2
     VERIFIED=4
 
+    PLOT_MAP = {
+        'geometry': fields.trees.POINT,
+        'width': fields.trees.PLOT_WIDTH,
+        'length': fields.trees.PLOT_LENGTH,
+        'type': fields.trees.PLOT_TYPE,
+        'readonly': fields.trees.READ_ONLY,
+        'sidewalk_damage': fields.trees.SIDEWALK,
+        'powerline_conflict_potential': fields.trees.POWERLINE_CONFLICT,
+        'owner_orig_id': fields.trees.ORIG_ID_NUMBER,
+        'owner_additional_id': fields.trees.DATA_SOURCE,
+        'owner_additional_properties': fields.trees.NOTES
+    }
+
+    TREE_MAP = {
+        'tree_owner': fields.trees.OWNER,
+        'steward_name': fields.trees.STEWARD,
+        'dbh': fields.trees.DIAMETER,
+        'height': fields.trees.TREE_HEIGHT,
+        'canopy_height': fields.trees.CANOPY_HEIGHT,
+        'species': fields.trees.SPECIES_OBJECT,
+        'sponsor': fields.trees.SPONSOR,
+        'date_planted': fields.trees.DATE_PLANTED,
+        'readonly': fields.trees.READ_ONLY,
+        'projects': fields.trees.LOCAL_PROJECTS,
+        'condition': fields.trees.TREE_CONDITION,
+        'canopy_condition': fields.trees.CANOPY_CONDITION,
+        'url': fields.trees.URL,
+        'pests': fields.trees.PESTS
+    }
+
     # plot that was created from this row
     plot = models.ForeignKey(Plot, null=True, blank=True)
 
@@ -727,27 +842,42 @@ class TreeImportRow(GenericImportRow):
         return fields.trees
 
     def commit_row(self):
+        # If this row was already commit... abort
+        if self.plot:
+            self.status = TreeImportRow.SUCCESS
+            self.save()
+
         # First validate
         if not self.validate_row():
             return False
 
-        #TODO: This is a kludge to get it to work with the
-        #      old system. Once everything works we can drop
-        #      this code
-        from treemap.models import ImportEvent
-
-        objs = ImportEvent.objects.filter(file_name=self.import_event.file_name)
-        if len(objs) == 0:
-            import_event = ImportEvent(file_name=self)
-            import_event.save()
-        else:
-            import_event = objs[0]
-        #
-        # END OF KLUDGE
-        #
-
         # Get our data
         data = self.cleaned
+
+        self.convert_units(data, {
+            fields.trees.PLOT_WIDTH:
+            self.import_event.plot_width_conversion_factor,
+
+            fields.trees.PLOT_LENGTH:
+            self.import_event.plot_length_conversion_factor,
+
+            fields.trees.DIAMETER:
+            self.import_event.diameter_conversion_factor,
+
+            fields.trees.TREE_HEIGHT:
+            self.import_event.tree_height_conversion_factor,
+
+            fields.trees.CANOPY_HEIGHT:
+            self.import_event.canopy_height_conversion_factor
+        })
+
+        # We need the import event from treemap.models
+        # the names of things are a bit odd here but
+        # self.import_event ->
+        #   TreeImportEvent (importer) ->
+        #     ImportEvent (treemap)
+        #
+        base_treemap_import_event = self.import_event.base_import_event
 
         plot_edited = False
         tree_edited = False
@@ -775,37 +905,7 @@ class TreeImportRow(GenericImportRow):
 
         data_owner = self.import_event.owner
 
-        plot_map = {
-            'geometry': fields.trees.POINT,
-            'width': fields.trees.PLOT_WIDTH,
-            'length': fields.trees.PLOT_LENGTH,
-            'type': fields.trees.PLOT_TYPE,
-            'readonly': fields.trees.READ_ONLY,
-            'sidewalk_damage': fields.trees.SIDEWALK,
-            'powerline_conflict_potential': fields.trees.POWERLINE_CONFLICT,
-            'owner_orig_id': fields.trees.ORIG_ID_NUMBER,
-            'owner_additional_id': fields.trees.DATA_SOURCE,
-            'owner_additional_properties': fields.trees.NOTES
-        }
-
-        tree_map = {
-            'tree_owner': fields.trees.OWNER,
-            'steward_name': fields.trees.STEWARD,
-            'dbh': fields.trees.DIAMETER,
-            'height': fields.trees.TREE_HEIGHT,
-            'canopy_height': fields.trees.CANOPY_HEIGHT,
-            'species': fields.trees.SPECIES_OBJECT,
-            'sponsor': fields.trees.SPONSOR,
-            'date_planted': fields.trees.DATE_PLANTED,
-            'readonly': fields.trees.READ_ONLY,
-            'projects': fields.trees.LOCAL_PROJECTS,
-            'condition': fields.trees.TREE_CONDITION,
-            'canopy_condition': fields.trees.CANOPY_CONDITION,
-            'url': fields.trees.URL,
-            'pests': fields.trees.PESTS
-        }
-
-        for modelkey, importdatakey in plot_map.iteritems():
+        for modelkey, importdatakey in TreeImportRow.PLOT_MAP.iteritems():
             importdata = data.get(importdatakey, None)
 
             if importdata:
@@ -814,10 +914,10 @@ class TreeImportRow(GenericImportRow):
 
         if plot_edited:
             plot.last_updated_by = data_owner
-            plot.import_event = import_event
+            plot.import_event = base_treemap_import_event
             plot.save()
 
-        for modelkey, importdatakey in tree_map.iteritems():
+        for modelkey, importdatakey in TreeImportRow.TREE_MAP.iteritems():
             importdata = data.get(importdatakey, None)
 
             if importdata:
@@ -828,7 +928,7 @@ class TreeImportRow(GenericImportRow):
 
         if tree_edited:
             tree.last_updated_by = data_owner
-            tree.import_event = import_event
+            tree.import_event = base_treemap_import_event
             tree.plot = plot
             tree.save()
 
@@ -886,10 +986,12 @@ class TreeImportRow(GenericImportRow):
         return True
 
     def validate_proximity(self, point):
+        base_import_event = self.import_event.base_import_event
         nearby = Plot.objects\
                      .filter(present=True,
                              geometry__distance_lte=(point, D(ft=10.0)))\
                      .distance(point)\
+                     .exclude(import_event=base_import_event)\
                      .order_by('distance')[:5]
 
         if len(nearby) > 0:
@@ -924,12 +1026,14 @@ class TreeImportRow(GenericImportRow):
         genus = self.datadict.get(fields.trees.GENUS,'')
         species = self.datadict.get(fields.trees.SPECIES,'')
         cultivar = self.datadict.get(fields.trees.CULTIVAR,'')
+        other_part = self.datadict.get(fields.trees.OTHER_PART_OF_NAME,'')
 
         if genus != '' or species != '' or cultivar != '':
             matching_species = Species.objects\
                                       .filter(genus__iexact=genus)\
                                       .filter(species__iexact=species)\
-                                      .filter(cultivar_name__iexact=cultivar)
+                                      .filter(cultivar_name__iexact=cultivar)\
+                                      .filter(other_part_of_name__iexact=other_part)
 
             if len(matching_species) == 1:
                 self.cleaned[fields.trees.SPECIES_OBJECT] = matching_species[0]

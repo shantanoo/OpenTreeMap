@@ -1,16 +1,26 @@
-
 /** Importer namespace **/
-var I = {
-    importevent: window.location.pathname.match('/([a-z]+)/([0-9]+)')[2],
-    import_type: window.location.pathname.match('/([a-z]+)/([0-9]+)')[1]
-};
+var I = {};
 
-I.api_prefix = '/importer/api/' + I.import_type + '/';
-
-(function($,I) {
+(function($,I,TM) {
 
     I.views = {};
     I.api = {};
+    I.constants = {};
+
+    I.constants.species_fields = ['genus', 'species', 'cultivar',
+                                  'other part of scientific name'];
+
+    var loadTemplateCache = {};
+    function loadTemplate(t) {
+        if (loadTemplateCache[t]) {
+            return loadTemplateCache[t];
+        } else {
+            loadTemplateCache[t] = _.template($("#" + t).html());
+            return loadTemplateCache[t];
+        }
+    };
+
+    I.loadTemplate = loadTemplate;
 
     /** Dummy function (for now) **/
     I.signalError = function(error) {};
@@ -92,10 +102,16 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
         }
 
         var rowModel = mergeModels.data[row.row];
+        var rowData = {};
+        for (var i=0;i<rowModel.data.length;i+=1) {
+            rowData[rowModel.data[i].field] = rowModel.data[i];
+        }
+        rowModel.indexed_data = rowData;
 
         var $merge = $(
             _.template($("#merge-template").html(),
-                       { 'fields': rowModel}));
+                       { 'fields': rowModel,
+                         'field_order': panel.data.field_order }));
 
         // Select the correct checkboxes
         updateCheckboxState(rowModel, $merge);
@@ -231,6 +247,39 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
         };
     };
 
+    I.views.updateListTableWithNewData = function(table, data) {
+        _.map(data, function(counts, id) {
+            var $tr = $(table).find("tr[data-id=" + id + "]");
+            var $td = $(table).find("td[data-count]");
+
+            var total = $td.data('count');
+
+            // 3 => Number of pending records
+            var pct = parseInt((1.0 - counts["3"] / total) * 1000.0) / 10.0;
+
+            // Django can do the work
+            $td.text((total - counts["3"]) + "/" + total + " (" + pct + "%)");
+        });
+    };
+
+    /**
+     * Get possible species matches
+     */
+    I.api.getSpeciesMatches = function(tgt) {
+        return $.ajax(I.api_base + 'species/similar?target=' + tgt)
+            .fail(I.signalError);
+    };
+
+
+    /**
+     * Getting update counts
+     *
+     * Returns deferred obj
+     */
+    I.api.getUpdatedCounts = function () {
+        return $.ajax(I.api_prefix + 'counts')
+            .fail(I.signalError);
+    };
 
     /**
      * Basic tree editing and shared code
@@ -294,24 +343,44 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
         return I.api.fetchResults(panel.request_key, I.importevent, panel.page);
     };
 
+    /**
+     * Update a row and rerun verification
+     *
+     * @param row the row data to update
+     */
+    I.api.updateRow = function(row) {
+        return $.ajax({
+            url: I.api_prefix + I.importevent + '/update',
+            data: {
+                'row': JSON.stringify(row)
+            }
+        });
+    };
+
     function concat(a,b) {
         return a.concat(b);
     }
 
     function extract_error_fields(row) {
-        return _(row.errors)
+        return _.chain(row.errors)
             .filter(function(r) { return r['fatal']; })
-            .map(function(r) { return r['fields']; })
-            .reduce(concat, [])
-            .reduce(function(h,f) { h[f] = 1; return h; }, {});
+            .reduce(function(h,f) {
+                return _.reduce(f.fields, function(hh, fld) {
+                    hh[fld] = f; return hh;
+                }, h);
+            }, {})
+            .value();
     }
 
     function extract_warning_fields(row) {
-        return _(row.errors)
+        return _.chain(row.errors)
             .filter(function(r) { return !r['fatal']; })
-            .map(function(r) { return r['fields']; })
-            .reduce(concat, [])
-            .reduce(function(h,f) { h[f] = 1; return h; }, {});
+            .reduce(function(h,f) {
+                return _.reduce(f.fields, function(hh, fld) {
+                    hh[fld] = f; return hh;
+                }, h);
+            }, {})
+            .value();
     }
 
     /**
@@ -338,9 +407,10 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
             header += '<th>Plot</th>';
         }
 
-        header = _(rows.fields)
+        header = _.chain(panel.data.field_order)
             .map(function(f) { return '<th>' + f + '</th>'; })
-            .reduce(concat, header);
+            .reduce(concat, header)
+            .value();
 
         var table = $('<table class="table table-condensed table-bordered">\n<tr>' + header + '</tr>\n');
 
@@ -363,16 +433,34 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
                                    'Plot #' + row.plot_id + '</a></td>');
                     }
 
+                    // Key data by field name
+                    var rowdata = {};
                     for (var i=0;i<row.data.length;i++) {
                         var key = rows.fields[i];
                         var fld = row.data[i];
+                        rowdata[key] = fld;
+                    }
+
+                    for (var i=0;i<panel.data.field_order.length;i++) {
+                        var key = panel.data.field_order[i];
+                        var fld = rowdata[key];
 
                         var $td = $('<td></td>');
                         if (errors[key]) {
                             $td.addClass('error');
+                            $td.click(I.createErrorClickHandler(
+                                $td, rows.fields, row, errors[key], key, fld));
+
                         } else if (warnings[key]) {
                             $td.addClass('warning');
+
+                            // Don't show errors on the merge panel
+                            if (panel.name != "mergereq") {
+                                $td.click(I.createWarningClickHandler(
+                                    $td, row, warnings[key], fld));
+                            }
                         }
+
                         $td.html('' + fld);
                         $tr.append($td);
                     }
@@ -392,11 +480,269 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
             .append(I.views.createPager(panel));
     };
 
+    // Modifies page state
+    function closeErrorPopups() {
+        // Remove old error popups
+        $(".error-popup").remove();
+    };
+
+
+    I.createErrorClickHandler = function($td, flds, row, errors, fld, val) {
+        return function() {
+            // Remove old error popups
+            closeErrorPopups();
+
+            var popover = _.template($('#error-template').html(), {
+                height: 200,
+                header: errors['msg'],
+                content: ''});
+
+            var $popover = $(popover);
+            if (_.contains(I.constants.species_fields, fld)) {
+                var content = 'Looking for similar species...';
+                $popover.find('.popover-content').html(content);
+
+                getContentForSpeciesError(flds, row, fld, val, errors)
+                    .done(function(content) {
+                        $popover.find('.popover-content')
+                                      .empty()
+                                      .append(content);
+
+                        resizePopovers();
+
+                        // Don't trigger td click handlers
+                        $popover.click(function(e) { e.stopPropagation(); });
+                    });
+            } else {
+                var $content = getContentForGenericError(
+                    flds, row, fld, val);
+
+                $popover.find('.popover-content')
+                    .empty()
+                    .append($content);
+
+                $popover.click(function(e) { e.stopPropagation(); });
+            }
+
+            $(this).parent().parent().parent().parent().parent().append($popover);
+            var tdH = $(this).height(),
+                tdW = $(this).width(),
+                tdX = $(this).position().left + (tdW/2) - 100,
+                tdY = $(this).position().top + tdH;
+            resizePopovers(tdX, tdY);
+        };
+    };
+
+    function getContentForGenericError(flds, row, fld, val) {
+        var $content = $(loadTemplate('generic-error')({
+            value: val,
+            field: fld
+        }));
+
+        $content.find(".cancel").click(function(e) {
+            closeErrorPopups();
+            e.stopPropagation(); // Seems like a hack?
+        });
+        $content.find(".update").click(function(e) {
+            var sln = {};
+            sln.transform = function(row) {
+                row[fld] = $content.find('input').val();
+
+                return row;
+            };
+
+            commitRowWithSolution(flds, row, sln);
+
+            closeErrorPopups();
+            e.stopPropagation(); // Seems like a hack?
+        });
+
+        return $content;
+    };
+
+    // side-effecting function
+    function resizePopovers(tdX, tdY) {
+        var $popover = $('.error-popup');
+        var titleHeight = $popover.find('.popover-title').height();
+        var contentHeight = $popover.find('.popover-content').height();
+
+        $popover.height(contentHeight + titleHeight + 38);
+        $popover.css({
+          'top': tdY + "px",
+          'left': tdX + "px"
+        });
+    };
+
+    function getContentForMoreSpeciesOptions(flds, row) {
+        var source = _.map(TM.speciesData, function(d) {
+            var sciname = d.genus + ' ' + d.species + ' ' + d.cultivar + ' ' + d.other_part;
+            return d.cname + " [" + sciname + "]";
+        });
+
+        var $content = $(loadTemplate("species-error-more-content")({
+            species: source
+        }));
+
+        function updateDropDown(event, ui) {
+            $content.find(".specieslist")
+                .val($content
+                     .find(".speciesbyname")
+                     .val());
+        }
+
+        $content.find(".speciesbyname")
+            .autocomplete({
+                source: source,
+                change: updateDropDown
+            });
+
+        $content.find(".cancel").click(function(e) {
+            closeErrorPopups();
+            e.stopPropagation(); // Seems like a hack?
+        });
+
+        $content.find(".select").click(function(e) {
+            var i =_.indexOf(source, $content.find(".specieslist").val());
+            var d = TM.speciesData[i];
+
+            var sln = {};
+            sln.transform = function(row) {
+                row.genus = d.genus;
+                row.species = d.species;
+                row.cultivar = d.cultivar;
+                row['other part of scientific name'] = d.other_part;
+
+                return row;
+            };
+
+            commitRowWithSolution(flds, row, sln);
+
+            closeErrorPopups();
+            e.stopPropagation(); // Seems like a hack?
+        });
+
+        return $content;
+    };
+
+    function getContentForSpeciesError(flds, row, fld, val, error) {
+        return getSolutionsForSpeciesError(fld, val, error)
+            .pipe(function (slns) {
+                var best = slns[0];
+                var $error = $(loadTemplate("species-error-content")({
+                    possible: best['new_val']
+                }));
+
+                var $more = getContentForMoreSpeciesOptions(flds, row);
+
+                // Wire up events
+                $error.find(".cancel").click(function(e) {
+                    closeErrorPopups();
+                    e.stopPropagation(); // Seems like a hack?
+                });
+                $error.find(".moreoptions").click(function(e) {
+                    $error.empty()
+                        .append($more);
+
+                    resizePopovers();
+
+                    e.stopPropagation(); // Seems like a hack?
+                });
+                $error.find(".yes").click(function(e) {
+                    commitRowWithSolution(flds, row, best);
+                    closeErrorPopups();
+
+                    e.stopPropagation(); // Seems like a hack?
+                });
+                return $error;
+            });
+    };
+
+    /**
+     * Update the given row with a particular solution
+     */
+    function commitRowWithSolution(flds, row, sln) {
+        var r = sln['transform'](_.object(flds, row));
+        r.id = row.row;
+        I.api.updateRow(r).done(function() {
+            _.map(I.rt.panels, I.updatePane);
+        });
+    };
+
+    /**
+     * Get a list of solutions for a species error. A single solution
+     * is a dict of: 'old_val', 'new_val', 'transformer'.
+     *
+     * [old|new]_val is a string of the [old|new] value
+     * transformer is a function that takes in the row data
+     * and returns a new row data
+     *
+     * This method may make calls to the server and this returns
+     * a deffered object
+     */
+    var species_memo;
+    function getSolutionsForSpeciesError(fld, val, error) {
+        // No need to make a bunch of extra round trips for
+        // no reason
+        species_memo = species_memo || {};
+
+        if (species_memo[error.data]) {
+            return $.when(species_memo[error.data]);
+        }
+
+        function createRowTransformer(keys, d) {
+            return function(row) {
+                var rslt = {};
+                _.each(keys, function(key) {
+                    rslt[key] = d[key];
+                });
+                return rslt;
+            };
+        }
+
+        // Need to talk to the server to grab species
+        // types
+        return I.api.getSpeciesMatches(error.data)
+            .pipe(function(data) { // Build solutions here
+                return _.map(data, function(match) {
+                    var newval = _.reduce(I.constants.species_fields,
+                                          function(s,k) { return s + match[k] + ' '; },
+                                          '');
+
+                    return { 'old_val': val,
+                             'new_val': newval,
+                             'transform': createRowTransformer(
+                                 I.constants.species_fields, match)
+                           };
+                });
+            })
+            .done(function(rslt) { // Memoize for future use
+                species_memo[error.data] = rslt;
+            });
+    };
+
+    I.createWarningClickHandler = function($td, row, warnings, fld) {
+        return function() {
+            // Remove old error popups
+            $(".error-popup").remove();
+
+            var $popover = $(_.template($('#error-template').html(), {
+                height: 200,
+                header: 'Warning',
+                content: warnings['msg']}));
+
+            $(this).append($popover);
+            resizePopovers();
+        };
+    };
+
     I.views.createPager = function (panel) {
         var total_pages = panel.data.total_pages;
+        var start_page = _.max([panel.page - 5, 0]);
 
         var $pager = $(_.template($('#pager-template').html(), {
-            total_pages: total_pages
+            page: panel.page,
+            start_page: start_page,
+            end_page: _.min([total_pages,start_page + 10])
         }));
 
         $pager.find('a').click(function() {
@@ -468,6 +814,25 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
         };
     };
 
+    I.updateIfPendingOrVerified = function (pane) {
+        var pname = '';
+        // this isn't great but works
+        // shouldn't reference runtime variables here
+        if (I.rt.mode === 'create') {
+            pname = 'verified';
+        } else {
+            pname = 'pending';
+        }
+
+        if (pane.name === pname && pane.data.count > 0) {
+            setTimeout(function() {
+                _.map(I.rt.panels, I.updatePane);
+            }, 10000);
+        }
+
+        return pane;
+    };
+
     /**
      * Update a given panel
      */
@@ -475,6 +840,7 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
         I.api.fetchPanel(pane)
             .done(I.views.rowCountUpdater(pane))
             .pipe(setter(pane, 'data'))
+            .pipe(I.updateIfPendingOrVerified)
             .pipe(I.views.renderTable)
             .pipe(replacePaneView(pane))
             .fail(I.signalError);
@@ -533,25 +899,25 @@ I.api_prefix = '/importer/api/' + I.import_type + '/';
         return _.reduce(panels, createTabPanel, createTabContainer());
     };
 
-}($,I));
+}($,I,tm));
 
+I.init = {};
+I.init.status = function() {
 
-$(function() {
+    I.importevent = window.location.pathname.match('/([a-z]+)/([0-9]+)$')[2];
+    I.import_type = window.location.pathname.match('/([a-z]+)/([0-9]+)$')[1];
+    I.api_base = tm_urls.site_root + 'importer/api/';
+    I.api_prefix = tm_urls.site_root + 'importer/api/' + I.import_type + '/';
+
     /**
      * Runtime layout and information
      */
     I.rt = {
         tree_panels: {
-            success: {
-                request_key: 'success',
-                name: 'success',
-                display_name: 'Success',
-                page: 0
-            },
-            pending: {
-                request_key: 'waiting',
-                name: 'pending',
-                display_name: 'Pending',
+            verified: {
+                request_key: 'verified',
+                name: 'verified',
+                display_name: 'Ready to Add',
                 page: 0
             },
             errors: {
@@ -566,18 +932,24 @@ $(function() {
                 display_name: 'Tree Watch',
                 page: 0
             },
-            verified: {
-                request_key: 'verified',
-                name: 'verified',
-                display_name: 'Verified',
+            success: {
+                request_key: 'success',
+                name: 'success',
+                display_name: 'Successfully Added',
+                page: 0
+            },
+            pending: {
+                request_key: 'waiting',
+                name: 'pending',
+                display_name: 'Pending',
                 page: 0
             }
         },
         species_panels: {
-            success: {
-                request_key: 'success',
-                name: 'success',
-                display_name: 'Success',
+            newspecies: {
+                request_key: 'verified',
+                name: 'verified',
+                display_name: 'Ready to Add',
                 page: 0
             },
             merge_req: {
@@ -592,10 +964,10 @@ $(function() {
                 display_name: 'Errors',
                 page: 0
             },
-            newspecies: {
-                request_key: 'verified',
-                name: 'verified',
-                display_name: 'Ready to Create',
+            success: {
+                request_key: 'success',
+                name: 'success',
+                display_name: 'Successfully Added',
                 page: 0
             }
         }
@@ -624,8 +996,11 @@ $(function() {
 
     // Wire up 'create' button
     $("#createtrees").click(function() {
+        I.rt.mode = 'create';
         I.api.commitEdit(I.importevent)
-            .done(function () { _.map(I.rt.panels, I.updatePane); });
+
+        window.location =
+            window.location.pathname.match('(.*/importer/).*$')[1];
     });
 
     // Initially show first panel
@@ -641,4 +1016,110 @@ $(function() {
     // Update each pane to grab initial data
     _.map(I.rt.panels, I.updatePane);
 
-});
+};
+
+I.init.list = function() {
+    I.api_prefix = tm_urls.site_root + 'importer/api/';
+
+    // Auto-updater
+    var numPrevSpeciesCounts = -1;
+    var numPrevTreeCounts = -1;
+
+    function update_counts() {
+        if ($("tr[data-running=true]").length > 0) {
+            I.api.getUpdatedCounts()
+                .done(function(c) {
+                    if ((numPrevSpeciesCounts > 0 &&
+                         _.keys(c.species).length != numPrevSpeciesCounts) ||
+                        (numPrevTreeCounts > 0 &&
+                         _.keys(c.trees).length != numPrevTreeCounts)) {
+                        document.location.reload(true);
+                    }
+
+
+                    I.views.updateListTableWithNewData($("#activetree"), c['trees']);
+                    I.views.updateListTableWithNewData($("#activespecies"), c['species']);
+
+                    numPrevSpeciesCounts = _.keys(c.species).length;
+                    numPrevTreeCounts = _.keys(c.trees).length;
+
+                    if (numPrevSpeciesCounts + numPrevTreeCounts > 0) {
+                        setTimeout(update_counts, 5000);
+                    }
+                });
+        }
+    }
+
+    // Create unit types dialog
+    var conversions =
+        { "Inches" : 1.0,
+          "Meters": 39.3701,
+          "Centimeters": 0.393701 };
+
+    function setupUnitsDialog($unitsDialog, $submit, $form) {
+
+        var $select = _.reduce(conversions, function ($sel,factor,label) {
+            return $sel.append($("<option>")
+                               .attr("value",factor)
+                               .text(label));
+        }, $("<select>"));
+
+        $unitsDialog.find("tr").each(function (i,row) {
+            if (i > 0) {
+                $(row).append($("<td>").append($select.clone()));
+            }
+        });
+
+        $("body").append($unitsDialog);
+
+        $unitsDialog.dialog({
+            autoOpen: false,
+            width: 350,
+            modal: true
+        });
+
+        $submit.click(function() {
+            $unitsDialog.dialog('open');
+        });
+
+        $unitsDialog.find(".cancel").click(function() {
+            $unitsDialog.dialog('close');
+        });
+
+        $unitsDialog.find(".create").click(function() {
+            var fields = {};
+            // Extract field values
+            $unitsDialog.find("tr").each(function (i,row) {
+                if (i > 0) {
+                    var tds = $(row).find("td");
+                    fields["unit_" + tds.first().html().replace(" ","_").toLowerCase()] =
+                        tds.last().find("select").val();
+                }
+            });
+
+            // Update hidden format fields
+            _.each(fields, function(val,label) {
+                $form.find("input[name=" + label  + "]")
+                    .attr("value", val);
+            });
+
+            $form.submit();
+        });
+    }
+
+
+    setupUnitsDialog($("#treeunitsdialog"),
+                    $("#submittree"),
+                    $("#treeform"));
+
+    setupUnitsDialog($("#speciesunitsdialog"),
+                    $("#submitspecies"),
+                    $("#speciesform"));
+
+
+    // Start the updater
+    update_counts();
+
+};
+
+$(function() { I.init[_.last(window.location.pathname.match('/importer/([a-z]+)')) || "list"](); });

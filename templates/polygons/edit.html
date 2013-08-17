@@ -1,0 +1,50 @@
+{% extends "polygons/base.html" %}
+
+{% block polygoncontent %}
+
+<h1 class="polygon-title">Polygon #{{ polygonobj.pk }}</h1>
+
+<form method="POST" action="{{ SITE_ROOT}}polygons/{{ polygonobj.pk }}/update">
+  <div class="table-container">
+    <table class="polygon-table table" data-id="{{ polygonobj.pk }}" width="100%">
+      <tr>
+        <th>Species</th>
+        {% for cl in classes %}
+        <th data-dbh-id={{ cl.pk }}>{{ cl.label }}</th>
+        {% endfor %}
+        <th></th>
+      </tr>
+      {% for row in polygon %}
+      <tr>
+        {% for item in row %}
+        {% if forloop.first %}
+        <td data-species-id="{{ item.0 }}">{{ item.1 }}</td>
+        {% else %}
+        <td><input name="pval_{{ polygonobj.pk }}_{{ row.0.0 }}_{{ item.0 }}" value="{% if item.1 %}{{ item.1 }}{% else %}0{% endif %}"></td>
+        {% endif %}
+        {% endfor %}
+        <td><a href="#" class="removespecies btn btn-mini btn-danger">Remove</a></td>
+      </tr>
+      {% endfor %}
+  </table>
+</div>
+
+<input type="submit" name="submit" value="Update" class="btn btn-success" />
+<a href="{{ SITE_ROOT}}polygons/{{ polygonobj.pk }}" class="btn">Cancel</a>
+</form>
+
+<div class="polygon-add-species">
+  <h4>Add Species Row</h4>
+  <label>Find a species by name:</label>
+  <div><input class="speciesbyname"></input></div>
+  <label>Or select from a list:</label>
+  <div>
+    <select class="specieslist">
+    </select>
+  </div>
+
+  <button class="addspecies btn btn-inverse">Add Row</button>
+</div>
+
+
+{% endblock %}

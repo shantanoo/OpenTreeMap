@@ -1,14 +1,63 @@
 {% extends "template_2.html" %}
 
 {% load url from future %}
+{% block tophead %}
+  <link href="//netdna.bootstrapcdn.com/twitter-bootstrap/2.3.2/css/bootstrap-combined.min.css" rel="stylesheet">
+{% endblock %}
 
 {% block extrahead %}
   {% load compressed %}
   {% compressed_js 'map' %}
   <link rel="stylesheet" href="{{ STATIC_URL }}css/importer.css" type="text/css"></link>
-
-  <script src="//cdnjs.cloudflare.com/ajax/libs/underscore.js/1.4.4/underscore-min.js"></script>
+  <script src="//netdna.bootstrapcdn.com/twitter-bootstrap/2.3.2/js/bootstrap.min.js"></script>
   <script src="{{ STATIC_URL }}js/importer.js"></script>
+
+  <script type="text/template" id="error-template">
+    <div class="error-popup popover fade bottom in" style="margin: 0; display: block; width: 200px;">
+      <div class="arrow"></div>
+      <h3 class="popover-title"><%= header %></h3>
+      <div class="popover-content">
+        <%= content %>
+      </div>
+    </div>
+  </script>
+
+  <script type="text/template" id="species-error-content">
+    <div>
+      <div>That species couldn't be found in the database.</div>
+      <div>Did you mean: <%= possible %>?</div>
+      <div>
+        <a class="yes btn btn-success btn-small">Yes</a>
+        <a class="moreoptions btn btn-info btn-small">More Options</a>
+        <a class="cancel btn btn-danger btn-small">Cancel</a>
+      </div>
+    </div>
+  </script>
+
+  <script type="text/template" id="generic-error">
+    <div>
+      <input type="text" value="<%= value %>" name="<%= field %>">
+      <a class="update btn btn-info btn-small">Update</a>
+      <a class="cancel btn btn-alert btn-small">Cancel</a>
+    </div>
+  </script>
+
+  <script type="text/template" id="species-error-more-content">
+    <div>Find a species by name:</div>
+    <div><input class="speciesbyname"></input></div>
+    <div>Or select from a list:</div>
+    <div>
+      <select class="specieslist">
+        <% _.each(species, function(s,i) { %>
+        <option data-index="<%= i %>"><%= s %></option>
+        <% }); %>
+      </select>
+    </div>
+    <div>
+      <a class="select btn btn-success btn-small">Select</a>
+      <a class="cancel btn btn-alert btn-small">Cancel</a>
+    </div>
+  </script>
 
   <script type="text/template" id="merge-template">
     <h1>Merge Species</h1>
@@ -19,7 +68,8 @@
         <th>Field</th>
         <% _.each(fields.header, function(f) { %><th><%= f %></th><% }) %>
       </tr>
-      <% _.each(fields.data, function(f) { %>
+      <% _.each(field_order, function(fo) {
+         var f = fields.indexed_data[fo]; %>
       <tr data-field="<%= f.field %>">
         <td>
           <%= f.field %></td>
@@ -32,25 +82,31 @@
       </tr>
       <% }) %>
       <tr><td></td>
-        <td><button data-matches="new">Create New</button></td>
+        <td><button data-matches="new">Create New Species</button></td>
       <% _.each(fields.keys, function(k) { %>
-        <td><button data-matches="<%= k %>">Select Species</button></td>
+        <td><button data-matches="<%= k %>">Merge Species</button></td>
       <% }); %>
     </table>
     </div>
   </script>
 
   <script type="text/template" id="pager-template">
-    <div class="pages">
-      <a href="#">&lt;</a>
-      <a href="#">&lt;&lt;</a>
-      <% _.each(_.range(0,total_pages), function(i) { %>
-        <a href="#"><%= i + 1 %></a>
-      <% }); %>
-      <a href="#">&gt;&gt;</a>
-      <a href="#">&gt;</a>
+    <div class="pages pagination pagination-small">
+      <ul>
+        <li><a href="#">&lt;</a></li>
+        <li><a href="#">&lt;&lt;</a></li>
+        <% _.each(_.range(start_page, end_page), function(i) { %>
+          <li
+            <% if (i == page) { %> class="active" <% } %>
+            ><a href="#"><%= i + 1 %></a>
+          </li>
+        <% }); %>
+        <li><a href="#">&gt;&gt;</a></li>
+        <li><a href="#">&gt;</a></li>
+      </ul>
     </div>
   </script>
+
 {% endblock %}
 
 {% block content_body_top %}
@@ -63,10 +119,13 @@
   {% include 'importer/partials/file_level_error.html' with event=event %}
 {% else %}
   <div class="importcontainer">
+    <h1 class="importer-header">Import Status</h1>
     <div id="tabs"></div>
   </div>
 
-  <button id="createtrees">Create Objects</button>
+  <button id="createtrees" class="btn btn-success btn-large">Add to TreeZilla &raquo;</button>
+
+  <a href="{% url 'importer.views.list_imports' %}"><button class="btn btn-success btn-large">Back to Uploads</button></a>
 {% endif %}
 
 {% endblock %}

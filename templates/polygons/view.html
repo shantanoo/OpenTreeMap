@@ -1,0 +1,28 @@
+{% extends "polygons/base.html" %}
+
+{% block polygoncontent %}
+
+<h1 class="polygon-title">Polygon #{{ polygonobj.pk }}</h1>
+{% if showedit %}
+<a href="{{ SITE_ROOT }}polygons/{{ polygonobj.pk }}/edit" class="polygon-edit"><button class="btn btn-success">Edit</button></a>
+{% endif %}
+
+<div class="table-container">
+  <table id="polygontable" class="table" width="100%">
+    <tr>
+      <th>Species</th>
+      {% for cl in classes %}
+      <th>{{ cl.label }}</th>
+      {% endfor %}
+    </tr>
+    {% for row in polygon %}
+    <tr>
+      {% for item in row %}
+      <td>{{ item.1 }}</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+{% endblock %}

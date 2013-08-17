@@ -1,0 +1,101 @@
+input {
+    width: 40px;
+}
+input.speciesbyname {
+    width: 95%;
+    padding: 5px;
+}
+
+#id_comment {
+    width: 94%;
+}
+
+.table-container table {
+    table-layout: fixed;
+    margin: 0;
+}
+.table-container th {
+    vertical-align: bottom;
+    width: 50px;
+    line-height: 16px;
+    padding-top: 15px;
+}
+.table-container th:first-child {
+    width: 100px;
+}
+.table-container tr:first-child th {
+   border-top: none;
+}
+.table-container th:nth-child(2n),
+.table-container td:nth-child(2n) {
+    background: rgba(214,232,207,.25);
+}
+
+#update-image {
+    padding: 0 0 5px;
+    display: block;
+}
+
+.polygon-add-species {
+    float: left;
+    background: #D6E8CF;
+    padding: 15px;
+    border-radius: 4px;
+    margin-top: 15px;
+}
+.polygon-add-species h4 {
+    font-size: 14px;
+    margin: 0 0 8px;
+}
+
+.polygon-title {
+   font-family: 'Delicious Heavy', Arial, Helvetica;
+   font-size: 36px;
+   font-weight: normal;
+   float: left;
+   margin-top: 25px;
+}
+.polygon-edit {
+   float: left;
+   margin: 26px 0 0 12px;
+}
+
+.table-container {
+    overflow: auto;
+    width: 95%;
+    clear: both;
+    margin-bottom: 8px;
+}
+
+/** CSS for OTM is screwy... we're just going to give
+    up and override styles as needed here **/
+
+#polygonmap {
+    width: 180px;
+    height: 180px;
+}
+
+#tree_comments {
+    margin-top: 0px;
+}
+
+.polygon-image {
+    margin-bottom: 10px;
+}
+
+.image-upload input {
+    width: 100%;
+}
+.image-upload input[type="file"] {
+    border: none;
+    height: 25px;
+    line-height: 30px;
+    margin-bottom: 5px;
+}
+
+.image-upload {
+    margin-top: 10px;
+    margin-bottom: 10px;
+
+    display: none;
+}
